@@ -11,6 +11,12 @@
 #import "UIImage+MultiFormat.h"
 #import <CommonCrypto/CommonDigest.h>
 
+#if TARGET_OS_IPHONE
+
+#import <ImageIO/ImageIO.h>
+#import <AssetsLibrary/AssetsLibrary.h>
+
+#endif
 // See https://github.com/rs/SDWebImage/pull/1141 for discussion
 @interface AutoPurgeCache : NSCache
 @end
@@ -68,6 +74,8 @@ FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
 
 @implementation SDImageCache {
     NSFileManager *_fileManager;
+    ALAssetsLibrary *_localAssetsLibrary;
+    NSMutableDictionary *_localAssetURLToAssetCache;
 }
 
 + (SDImageCache *)sharedImageCache {
@@ -267,6 +275,127 @@ FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
 
 - (void)storeImage:(UIImage *)image forKey:(NSString *)key toDisk:(BOOL)toDisk {
     [self storeImage:image recalculateFromImage:YES imageData:nil forKey:key toDisk:toDisk];
+}
+
+- (NSOperation *)localAssetWithURL:(NSURL *)url withLocalAssetSize:(SDLocalAssetSize)size done:(void (^)(UIImage *image, SDImageCacheType cacheType))doneBlock
+{
+    if (!doneBlock) return nil;
+    
+    if (!url)
+    {
+        doneBlock(nil, SDImageCacheTypeNone);
+        return nil;
+    }
+    
+    UIImage *image = [self imageFromMemoryCacheForKey:[NSString stringWithFormat:@"%@:%d", url.absoluteString, (int)size]];
+    if (image)
+    {
+        doneBlock(image, SDImageCacheTypeMemory);
+        return nil;
+    }
+    
+    NSOperation *operation = NSOperation.new;
+    
+    dispatch_async(self.ioQueue, ^
+                   {
+                       if (operation.isCancelled)
+                       {
+                           return;
+                       }
+                       
+                       UIImage *returnImage;
+                       
+                       __block ALAsset *localAsset;
+                       
+                       @synchronized(_localAssetURLToAssetCache)
+                       {
+                           localAsset = [_localAssetURLToAssetCache valueForKey:url.absoluteString];
+                       }
+                       
+                       if (!localAsset)
+                       {
+                           // Force the retrieval of the ALAsset to get retrieved from the ALAssetsLibrary synchronously using a semaphore
+                           dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+                           dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^
+                                          {
+                                              [_localAssetsLibrary assetForURL:url resultBlock:^(ALAsset *asset)
+                                               {
+                                                   @autoreleasepool
+                                                   {
+                                                       if (asset)
+                                                       {
+                                                           localAsset = asset;
+                                                           
+                                                           @synchronized(_localAssetURLToAssetCache)
+                                                           {
+                                                               // this Asset wasn't previous in our cache, add it for use later
+                                                               NSString *assetURL = ((NSURL *)[asset valueForProperty:ALAssetPropertyAssetURL]).absoluteString;
+                                                               [_localAssetURLToAssetCache setValue:asset forKey:assetURL];
+                                                           }
+                                                       }
+                                                   }
+                                                   dispatch_semaphore_signal(sema);
+                                               }
+                                                                  failureBlock:^(NSError *error)
+                                               {
+                                                   dispatch_semaphore_signal(sema);
+                                               }];
+                                          });
+                           
+                           dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+                       }
+                       
+                       if (localAsset)
+                       {
+                           if (operation.isCancelled)
+                           {
+                               return;
+                           }
+                           
+                           switch (size)
+                           {
+                               case SDLocalAssetSizeOriginal:
+                                   returnImage = [UIImage imageWithCGImage:localAsset.defaultRepresentation.fullResolutionImage];
+                                   break;
+                                   
+                               case SDLocalAssetSizeFullscreenAspect:
+                                   returnImage = [UIImage imageWithCGImage:localAsset.defaultRepresentation.fullScreenImage];
+                                   break;
+                                   
+                               case SDLocalAssetSizeThumnailSquare:
+                                   returnImage = [UIImage imageWithCGImage:localAsset.thumbnail];
+                                   break;
+                                   
+                               default:
+                                   returnImage = [UIImage imageWithCGImage:localAsset.aspectRatioThumbnail];
+                                   break;
+                           }
+                           
+                           if (returnImage)
+                           {
+                               CGFloat cost = returnImage.size.height * returnImage.size.width * returnImage.scale;
+                               [self.memCache setObject:returnImage forKey:[NSString stringWithFormat:@"%@:%d", url.absoluteString, (int)size] cost:cost];
+                           }
+                           
+                           if (operation.isCancelled)
+                           {
+                               return;
+                           }
+                           
+                           dispatch_main_sync_safe(^
+                                                   {
+                                                       doneBlock(returnImage, SDImageCacheTypeLocalAssetStore);
+                                                   });
+                           
+                       } else {
+                           dispatch_main_sync_safe(^
+                                                   {
+                                                       doneBlock(nil, SDImageCacheTypeNone);
+                                                   });
+                       }
+                   });
+    
+    return operation;
 }
 
 - (BOOL)diskImageExistsWithKey:(NSString *)key {

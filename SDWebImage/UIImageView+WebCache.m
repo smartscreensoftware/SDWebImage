@@ -82,7 +82,7 @@ static char TAG_ACTIVITY_SHOW;
                     completedBlock(image, error, cacheType, url);
                 }
             });
-        }];
+        } tag:(int)self.tag];
         [self sd_setImageLoadOperation:operation forKey:@"UIImageViewImageLoad"];
     } else {
         dispatch_main_async_safe(^{

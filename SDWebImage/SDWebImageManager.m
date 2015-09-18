@@ -110,7 +110,7 @@
 - (id <SDWebImageOperation>)downloadImageWithURL:(NSURL *)url
                                          options:(SDWebImageOptions)options
                                         progress:(SDWebImageDownloaderProgressBlock)progressBlock
-                                       completed:(SDWebImageCompletionWithFinishedBlock)completedBlock {
+                                       completed:(SDWebImageCompletionWithFinishedBlock)completedBlock{
     // Invoking this method without a completedBlock is pointless
     NSAssert(completedBlock != nil, @"If you mean to prefetch the image, use -[SDWebImagePrefetcher prefetchURLs] instead");
 
@@ -279,6 +279,113 @@
     }];
 
     return operation;
+}
+
+- (id <SDWebImageOperation>)downloadImageWithURL:(NSURL *)url
+                                         options:(SDWebImageOptions)options
+                                        progress:(SDWebImageDownloaderProgressBlock)progressBlock
+                                       completed:(SDWebImageCompletionWithFinishedBlock)completedBlock
+                                             tag:(int)tag {
+    
+    if(![SDWebImageManager urlIsLocalAsset:url]) {
+        return [self downloadImageWithURL:url options:options progress:progressBlock completed:completedBlock];
+    }
+    
+    // Invoking this method without a completedBlock is pointless
+    NSAssert(completedBlock != nil, @"If you mean to prefetch the image, use -[SDWebImagePrefetcher prefetchURLs] instead");
+    
+    // Very common mistake is to send the URL using NSString object instead of NSURL. For some strange reason, XCode won't
+    // throw any warning for this type mismatch. Here we failsafe this error by allowing URLs to be passed as NSString.
+    if ([url isKindOfClass:NSString.class]) {
+        url = [NSURL URLWithString:(NSString *)url];
+    }
+    
+    // Prevents app crashing on argument type error like sending NSNull instead of NSURL
+    if (![url isKindOfClass:NSURL.class]) {
+        url = nil;
+    }
+    
+    __block SDWebImageCombinedOperation *operation = [SDWebImageCombinedOperation new];
+    __weak SDWebImageCombinedOperation *weakOperation = operation;
+    
+    BOOL isFailedUrl = NO;
+    @synchronized (self.failedURLs) {
+        isFailedUrl = [self.failedURLs containsObject:url];
+    }
+    
+    if (!url || (!(options & SDWebImageRetryFailed) && isFailedUrl)) {
+        dispatch_main_sync_safe(^{
+            NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorFileDoesNotExist userInfo:nil];
+            completedBlock(nil, error, SDImageCacheTypeNone, YES, url);
+        });
+        return operation;
+    }
+    
+    @synchronized (self.runningOperations) {
+        [self.runningOperations addObject:operation];
+    }
+
+    SDLocalAssetSize assetSize;
+    
+    if (options & SDWebImageLocalAssetSizeThumnailSquare)
+    {
+        assetSize = SDLocalAssetSizeThumnailSquare;
+    }
+    else if (options & SDWebImageLocalAssetSizeFullscreenAspect)
+    {
+        assetSize = SDLocalAssetSizeFullscreenAspect;
+    }
+    else if (options & SDWebImageLocalAssetSizeOriginal)
+    {
+        assetSize = SDLocalAssetSizeOriginal;
+    }
+    else
+    {
+        assetSize = SDLocalAssetSizeThumnailAspect;
+    }
+    //Sukhpal
+    if (tag==55555) {
+        assetSize = SDLocalAssetSizeFullscreenAspect;
+    }
+    
+    if (tag==66666) {
+        assetSize = SDLocalAssetSizeOriginal;
+    }
+    if (tag==77777) {
+        assetSize = SDLocalAssetSizeThumnailSquare;
+    }
+    
+    
+    operation.cacheOperation = [self.imageCache localAssetWithURL:url withLocalAssetSize:assetSize done:^(UIImage *image, SDImageCacheType cacheType)
+                                {
+                                    if (weakOperation.isCancelled)
+                                    {
+                                        @synchronized(self.runningOperations)
+                                        {
+                                            [self.runningOperations removeObject:operation];
+                                        }
+                                        
+                                        return;
+                                    }
+                                    
+                                    dispatch_main_sync_safe(^
+                                                            {
+                                                                completedBlock(image, nil, cacheType, YES, url);
+                                                            });
+                                }];
+    
+    return operation;
+    
+}
+
++ (BOOL)urlIsLocalAsset:(NSURL *)url
+{
+    if ([url isKindOfClass:[NSString class]]) {
+        return [((NSString *)url) rangeOfString:@"assets-library"].location != NSNotFound;
+    }
+    
+    return ![url isEqual:[NSNull null]] && [url.scheme rangeOfString:@"assets-library"].location != NSNotFound;
+    
 }
 
 - (void)saveImageToCache:(UIImage *)image forURL:(NSURL *)url {

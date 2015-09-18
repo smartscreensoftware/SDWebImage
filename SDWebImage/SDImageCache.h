@@ -21,7 +21,34 @@ typedef NS_ENUM(NSInteger, SDImageCacheType) {
     /**
      * The image was obtained from the memory cache.
      */
-    SDImageCacheTypeMemory
+    SDImageCacheTypeMemory,
+    
+    SDImageCacheTypeLocalAssetStore
+};
+
+
+typedef NS_ENUM(NSInteger, SDLocalAssetSize) {
+    /**
+     * This size represents a thumbnail of the underlying ALAsset (with correct aspect ratio)
+     */
+    SDLocalAssetSizeThumnailAspect,
+    
+    /**
+     * This size represents a thumbnail of the underlying ALAsset (cropped square).
+     * This image will be of higher resolution than the `SDLocalAssetSizeThumnailAspect` type but
+     * will be cropeed to a square
+     */
+    SDLocalAssetSizeThumnailSquare,
+    
+    /**
+     * This size represents an appropriately sized image for fullscreen viewing on the current device
+     */
+    SDLocalAssetSizeFullscreenAspect,
+    
+    /**
+     * This size represents the original image in the user's camera roll
+     */
+    SDLocalAssetSizeOriginal
 };
 
 typedef void(^SDWebImageQueryCompletedBlock)(UIImage *image, SDImageCacheType cacheType);
@@ -133,6 +160,10 @@ typedef void(^SDWebImageCalculateSizeBlock)(NSUInteger fileCount, NSUInteger tot
  * @param toDisk      Store the image to disk cache if YES
  */
 - (void)storeImage:(UIImage *)image recalculateFromImage:(BOOL)recalculate imageData:(NSData *)imageData forKey:(NSString *)key toDisk:(BOOL)toDisk;
+
+
+
+- (NSOperation *)localAssetWithURL:(NSURL *)url withLocalAssetSize:(SDLocalAssetSize)size done:(void (^)(UIImage *image, SDImageCacheType cacheType))doneBlock;
 
 /**
  * Query the disk cache asynchronously.
